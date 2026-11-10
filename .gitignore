@@ -1,0 +1,9 @@
+dados/
+logs/
+plugins/
+.env
+__pycache__/
+.pytest_cache/
+.venv-prefect/
+*.pyc
+.DS_Store

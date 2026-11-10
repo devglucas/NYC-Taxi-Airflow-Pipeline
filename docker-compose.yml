@@ -1,0 +1,104 @@
+# Baseado no docker-compose oficial do Airflow 3.4, com LocalExecutor:
+# sem Redis nem Celery, porque uma máquina só não precisa deles.
+x-airflow: &airflow
+  build: .
+  image: taxi-airflow:3.4.0
+  env_file: [.env]
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__PARALLELISM: 6
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    PYTHONPATH: /opt/airflow
+    DADOS_DIR: /opt/airflow/dados
+    OUTPUT_DIR: /opt/airflow/output
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./tests:/opt/airflow/tests
+    - ./pytest.ini:/opt/airflow/pytest.ini
+    - ./dados:/opt/airflow/dados
+    - ./output:/opt/airflow/output
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+  user: "${AIRFLOW_UID}:0"
+  depends_on: &depende-postgres
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-airflow:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD, pg_isready, -U, airflow]
+      interval: 5s
+      retries: 10
+
+  airflow-init:
+    <<: *airflow
+    command: >
+      bash -c "airflow pools set downloads_tlc 2 'Respeita a fonte: no máximo dois downloads simultâneos' &&
+      airflow pools set warehouse 1 'DuckDB aceita um único processo escritor'"
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: airflow
+      _AIRFLOW_WWW_USER_PASSWORD: airflow
+
+  airflow-apiserver:
+    <<: *airflow
+    command: api-server
+    ports:
+      - "${AIRFLOW_PORTA}:8080"
+    healthcheck:
+      test: [CMD, curl, --fail, http://localhost:8080/api/v2/version]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      <<: *depende-postgres
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow
+    command: scheduler
+    depends_on:
+      <<: *depende-postgres
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow
+    command: dag-processor
+    depends_on:
+      <<: *depende-postgres
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Só sobe com --profile falhas: simula uma fonte instável.
+  fonte-instavel:
+    <<: *airflow
+    profiles: [falhas]
+    entrypoint: python
+    command: /opt/airflow/scripts/fonte_instavel.py
+    volumes:
+      - ./dados:/opt/airflow/dados
+      - ./scripts:/opt/airflow/scripts
+    depends_on: {}
+
+volumes:
+  postgres-airflow:

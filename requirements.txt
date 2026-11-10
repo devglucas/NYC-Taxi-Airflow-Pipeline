@@ -1,0 +1,7 @@
+# Dependências do pipeline e dos testes fora do contêiner.
+# O Airflow roda em Docker, com a versão fixada no Dockerfile.
+duckdb==2.0.0
+pandas==3.0.6
+matplotlib==3.11.2
+requests==2.34.2
+pytest==9.1.1
